@@ -1,0 +1,122 @@
+name: Candidate installer acceptance
+on:
+  push:
+    branches: ['validation/v1.0']
+  workflow_dispatch:
+    inputs:
+      asset_id:
+        description: Numeric GitHub Release asset ID of the candidate installer
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  installed-candidate:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - name: Download and verify candidate
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET_ID: ${{ inputs.asset_id || '693301671' }}
+          EXPECTED_SHA256: e9625571ca10c1c5f1607abf77d162d37c1023f8e8b75f92f88915c27182d622
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:ASSET_ID -notmatch '^\d+$') { throw 'Asset ID must be numeric' }
+          $url = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$env:ASSET_ID"
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/octet-stream'; 'X-GitHub-Api-Version' = '2022-11-28' }
+          $path = Join-Path $env:RUNNER_TEMP 'candidate.exe'
+          Invoke-WebRequest -Uri $url -Headers $headers -OutFile $path
+          $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:EXPECTED_SHA256) { throw "Installer SHA-256 mismatch: $actual" }
+      - name: Prepare desktop test transport
+        shell: pwsh
+        run: |
+          python -m pip install 'psutil==7.2.2' 'websocket-client==1.8.0'
+          if ($LASTEXITCODE -ne 0) { throw 'Test transport installation failed' }
+      - name: Default install, bundled checks, desktop and uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $report = Join-Path $env:RUNNER_TEMP 'candidate-acceptance'
+          New-Item -ItemType Directory -Path $report -Force | Out-Null
+          $uninstallRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
+          function Get-MeshPilotEntries {
+            @(Get-ItemProperty $uninstallRoot -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like '*MeshPilot*' })
+          }
+          if (@(Get-MeshPilotEntries).Count -ne 0) { throw 'Existing installation: refusing to alter it' }
+          $hostPython = (Get-Command python -ErrorAction Stop).Source
+          $target = $null
+          $installAttempted = $false
+          $testError = $null
+          try {
+            # Deliberately omit /D: this tests the installer's default non-system drive choice.
+            $installAttempted = $true
+            $process = Start-Process -FilePath (Join-Path $env:RUNNER_TEMP 'candidate.exe') -ArgumentList '/S' -WindowStyle Hidden -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "Installer exit $($process.ExitCode)" }
+            $entries = @(Get-MeshPilotEntries)
+            if ($entries.Count -ne 1) { throw 'Expected exactly one new per-user uninstall entry' }
+            $target = $entries[0].InstallLocation
+            if (-not $target -and $entries[0].UninstallString -match '^"([^"]+)"') { $target = Split-Path -Parent $Matches[1] }
+            if (-not $target) { throw 'Install location unavailable' }
+            $target = [IO.Path]::GetFullPath($target)
+            if ([IO.Path]::GetPathRoot($target).TrimEnd('\') -ieq $env:SystemDrive -or [IO.Path]::GetPathRoot($target) -ieq 'C:\') { throw "Default installed on system drive: $target" }
+            $exe = Join-Path $target 'MeshPilot.exe'
+            $app = Join-Path $target 'resources/backend/app'
+            $python = Join-Path $target 'resources/backend/runtime/python.exe'
+            $uninstaller = Join-Path $target 'Uninstall MeshPilot.exe'
+            foreach ($file in @($exe, $python, $uninstaller, (Join-Path $app 'apps/desktop/diagnose.py'))) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing installed file $file" } }
+            @{ installer_sha256 = 'e9625571ca10c1c5f1607abf77d162d37c1023f8e8b75f92f88915c27182d622'; install_path = $target; system_drive = $env:SystemDrive; runner_os = [Environment]::OSVersion.VersionString } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $report 'install.json')
+            $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+            $env:OPENBLAS_NUM_THREADS = '1'
+            $env:MKL_NUM_THREADS = '1'
+            Remove-Item Env:PYTHONPATH, Env:PYTHONHOME -ErrorAction SilentlyContinue
+            & $python -B (Join-Path $app 'apps/desktop/diagnose.py') *> (Join-Path $report 'diagnostics.log')
+            if ($LASTEXITCODE -ne 0) { throw 'Bundled diagnostics failed' }
+            & $python -B (Join-Path $app 'scripts/voxel_geometry_acceptance.py') --output (Join-Path $report 'voxel-geometry.json') *> (Join-Path $report 'voxel-geometry.log')
+            if ($LASTEXITCODE -ne 0) { throw 'Bundled voxel geometry acceptance failed' }
+            # The packaged script exercises real Hexmicro and voxel Voronoi, their
+            # manual quality checks, export and renderer. Host Python supplies only
+            # psutil/websocket CDP transport; generation uses the installed runtime.
+            & $hostPython -B (Join-Path $app 'scripts/desktop_acceptance.py') --exe $exe --output $report *> (Join-Path $report 'desktop.log')
+            if ($LASTEXITCODE -ne 0) { throw 'Packaged Electron acceptance failed' }
+            $desktopReports = @(Get-ChildItem -LiteralPath $report -Filter report.json -Recurse | Where-Object { $_.FullName -ne (Join-Path $report 'summary.json') })
+            if ($desktopReports.Count -ne 1) { throw 'Expected one desktop acceptance report' }
+            $desktop = Get-Content -Raw -LiteralPath $desktopReports[0].FullName | ConvertFrom-Json
+            if ($desktop.status -ne 'passed') { throw 'Desktop report failed' }
+            foreach ($name in @('voxel', 'hexmicro')) {
+              $case = $desktop.voronoi_ui.$name
+              if ($case.job -ne 'succeeded' -or $case.manual_check.report.readback.status -ne 'passed') { throw "$name Voronoi job/readback failed" }
+              foreach ($format in @('k', 'inp', 'msh')) { if (-not $case.manual_check.report.readback.$format.passed) { throw "$name $format readback failed" } }
+            }
+          } catch { $testError = $_.ToString() }
+          finally {
+            $cleanupError = $null
+            $entries = @(Get-MeshPilotEntries)
+            # Never uninstall an unknown or pre-existing installation.
+            if ($target -and $entries.Count -eq 1) {
+              $actual = $entries[0].InstallLocation
+              if (-not $actual -and $entries[0].UninstallString -match '^"([^"]+)"') { $actual = Split-Path -Parent $Matches[1] }
+              $uninstaller = Join-Path $target 'Uninstall MeshPilot.exe'
+              if ($actual -and [IO.Path]::GetFullPath($actual) -ieq $target -and (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
+                $u = Start-Process -FilePath $uninstaller -ArgumentList '/S' -WindowStyle Hidden -Wait -PassThru
+                Start-Sleep -Seconds 3
+                if ($u.ExitCode -ne 0 -or (Test-Path -LiteralPath (Join-Path $target 'MeshPilot.exe')) -or @(Get-MeshPilotEntries).Count -ne 0) { $cleanupError = 'Verified candidate uninstall failed or incomplete' }
+              } else { $cleanupError = 'Registry/installation changed; refused uninstall' }
+            } elseif ($installAttempted -and $entries.Count -gt 0) { $cleanupError = 'Could not safely identify candidate to uninstall' }
+            @{ status = $(if (-not $testError -and -not $cleanupError) { 'passed' } else { 'failed' }); error = $testError; cleanup_error = $cleanupError } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $report 'summary.json')
+            if ($testError -or $cleanupError) { throw "Acceptance failed: $testError; cleanup: $cleanupError" }
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: candidate-acceptance-report
+          path: ${{ runner.temp }}/candidate-acceptance
+          if-no-files-found: warn
+          retention-days: 7
+
