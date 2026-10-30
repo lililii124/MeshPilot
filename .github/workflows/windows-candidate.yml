@@ -12,6 +12,10 @@ permissions:
   contents: read
 jobs:
   installed-candidate:
+    # Draft release assets require push access. Use the ephemeral job token;
+    # no personal token or repository checkout is supplied to this workflow.
+    permissions:
+      contents: write
     runs-on: windows-2022
     timeout-minutes: 45
     steps:
