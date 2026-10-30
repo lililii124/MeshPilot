@@ -87,7 +87,36 @@ jobs:
             # The packaged script exercises real Hexmicro and voxel Voronoi, their
             # manual quality checks, export and renderer. Host Python supplies only
             # psutil/websocket CDP transport; generation uses the installed runtime.
-            & $hostPython -B (Join-Path $app 'scripts/desktop_acceptance.py') --exe $exe --output $report *> (Join-Path $report 'desktop.log')
+            # Correct only the controller's startup-dialog race. The installed
+            # application and all acceptance assertions remain unchanged.
+            $controller = Join-Path $env:RUNNER_TEMP 'desktop-controller'
+            New-Item -ItemType Directory -Path $controller -Force | Out-Null
+            Get-ChildItem -LiteralPath (Join-Path $app 'scripts') -Filter 'desktop*.py' | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $controller }
+            $patchController = @'
+          import hashlib, json, sys
+          from pathlib import Path
+          file = Path(sys.argv[1]) / 'desktop_graphics_qa.py'
+          original = file.read_bytes()
+          source = original.decode('utf-8')
+          old = '''            if page.js("fetch('/api/v1/bootstrap').then(r=>r.json()).then(b=>!!b.provider.configured)"):
+                          wait(lambda: page.js("document.querySelector('#project-dialog').open"), 20)
+                      if page.js("document.querySelector('#project-dialog').open"): page.click('#close-dialog')'''
+          new = '''            # Startup always opens this dialog after the asynchronous project
+                      # list loads, whether or not a model provider is configured.
+                      wait(lambda: page.js("document.querySelector('#project-dialog').open"), 40)
+                      page.click('#close-dialog')
+                      wait(lambda: page.js("!document.querySelector('#project-dialog').open"), 20)'''
+          source = source.replace('\r\n', '\n')
+          assert source.count(old) == 1, 'Unexpected controller source; refusing patch'
+          updated = source.replace(old, new)
+          compile(updated, str(file), 'exec')
+          file.write_text(updated, encoding='utf-8')
+          evidence = {'scope': 'test controller only; wait for unconditional startup dialog', 'before_sha256': hashlib.sha256(original).hexdigest(), 'after_sha256': hashlib.sha256(file.read_bytes()).hexdigest(), 'installed_application_modified': False}
+          (Path(sys.argv[2]) / 'controller-fix.json').write_text(json.dumps(evidence, indent=2), encoding='utf-8')
+          '@
+            & $hostPython -c $patchController $controller $report
+            if ($LASTEXITCODE -ne 0) { throw 'Test controller correction failed' }
+            & $hostPython -B (Join-Path $controller 'desktop_acceptance.py') --exe $exe --output $report *> (Join-Path $report 'desktop.log')
             if ($LASTEXITCODE -ne 0) { throw 'Packaged Electron acceptance failed' }
             $desktopReports = @(Get-ChildItem -LiteralPath $report -Filter report.json -Recurse | Where-Object { $_.FullName -ne (Join-Path $report 'summary.json') })
             if ($desktopReports.Count -ne 1) { throw 'Expected one desktop acceptance report' }
