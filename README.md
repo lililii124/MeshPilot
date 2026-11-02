@@ -15,6 +15,18 @@
 <img src="meshes/sphere-tetrahedral.gif" alt="球体四面体网格" width="46%">
 </p>
 <p align="center">
+<img src="meshes/user-mobius.gif" alt="曲面环带" width="46%">
+<img src="meshes/user-helix.gif" alt="螺旋结构" width="46%">
+</p>
+<p align="center">
+<img src="meshes/user-weave.gif" alt="编织结构" width="46%">
+<img src="meshes/user-intersecting-tubes.gif" alt="相贯圆柱" width="46%">
+</p>
+<p align="center">
+<img src="meshes/user-cell-walls.gif" alt="胞壁结构" width="46%">
+<img src="meshes/user-cylinder-transition.gif" alt="圆柱过渡网格" width="46%">
+</p>
+<p align="center">
 <img src="meshes/sandwich.gif" alt="夹芯板" width="46%">
 <img src="meshes/contact-detail.gif" alt="杆系接触区" width="46%">
 </p>
@@ -29,7 +41,4 @@
 <p align="center">
 <img src="meshes/inclusion-3d.gif" alt="多面体夹杂" width="46%">
 <img src="meshes/curved-tip.gif" alt="曲面尖端" width="46%">
-</p>
-<p align="center">
-<img src="meshes/layered-block.gif" alt="分层块体" width="46%">
 </p>
