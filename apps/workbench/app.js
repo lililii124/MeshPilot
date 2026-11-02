@@ -20,6 +20,7 @@ const attachmentDrafts = new Map();
 const attachmentUploads = new Map();
 let attachmentLimits={max_images_per_turn:4,max_file_bytes:5*1024*1024,max_turn_bytes:10*1024*1024};
 let sketch=null, initializationErrors=[];
+let licenseState=null, licenseRequiredAtStart=false;
 try {sketch=new SketchEditor((blob,project)=>uploadImage(blob,project,'在线草图'));}
 catch(error){initializationErrors.push('草图功能初始化失败：'+(error.message||String(error)));console.error('Sketch initialization failed',error);}
 function currentAttachments(id=state.project?.id){return attachmentDrafts.get(id)||[];}
@@ -114,11 +115,63 @@ async function request(path, options={}) {
         :/coarsening an existing discrete mesh/i.test(message)?'当前网格不能直接变粗，请重新构造网格或选择体素网格。'
         :/changing the cell type of a discrete mesh|cannot be converted to the requested shell cell type/i.test(message)?'当前网格不能直接转换为所选单元类型，请选择其他类型或重新构造网格。'
         :/workload|limit|budget/i.test(message)?'模型规模超过当前资源限制，请增大网格尺寸或简化模型。':'输入无效，请检查建模步骤和网格尺寸。') : null;
-    throw new Error(hints[code]||inputHint||message);
+    const retry=response.status===429?response.headers.get('Retry-After'):null;
+    const error=new Error((hints[code]||inputHint||message)+(retry?`（${retry} 秒后可重试）`:''));
+    error.code=code;error.status=response.status;
+    if((response.status===401||response.status===403)&&String(code||'').startsWith('LICENSE_')&&path!=='/license/import'){licenseState=null;showLicense(false,message);}
+    throw error;
   }
   return data;
 }
 const post=(path,data)=>request(path,{method:'POST',body:JSON.stringify(data)});
+
+function renderLicense(message=''){
+  $('license-machine').value=licenseState?.machine_code||'';
+  $('license-copy').disabled=!licenseState?.machine_code;
+  $('license-details').textContent=licenseState?.valid?[licenseState.customer,licenseState.version_scope].filter(Boolean).join(' · '):'';
+  $('license-status').textContent=message||licenseState?.message||'';
+  $('license-close').hidden=licenseRequiredAtStart;
+}
+function showLicense(required=false,message=''){
+  if(required)licenseRequiredAtStart=true;
+  renderLicense(message);
+  if(!$('license-dialog').open)$('license-dialog').showModal();
+  if(!licenseState?.machine_code)request('/license').then(value=>{licenseState=value;renderLicense(message);}).catch(error=>{$('license-status').textContent=error.message;});
+}
+async function copyMachineCode(){
+  const input=$('license-machine');
+  try{if(!navigator.clipboard?.writeText)throw new Error();await navigator.clipboard.writeText(input.value);}
+  catch{input.focus();input.select();if(!document.execCommand('copy')){$('license-status').textContent='请手动复制机器码';return;}}
+  $('license-status').textContent='已复制机器码';
+}
+async function refreshBootstrap(){
+  const boot=await request('/bootstrap');$('version').textContent=`v${String(boot.version||'0.2').replace(/^v/i,'')}`;
+  state.provider=boot.provider||null;state.catalog=boot.capabilities?.operations||{};attachmentLimits=boot.attachment_limits||attachmentLimits;
+  populateProviders(boot.providers,state.provider);licenseState=boot.license||null;return boot;
+}
+function bindLicense(){
+  $('license-open').onclick=async()=>{try{licenseState=await request('/license');showLicense();}catch(error){fail(error);}};
+  $('license-close').onclick=()=>{if(!licenseRequiredAtStart)$('license-dialog').close();};
+  $('license-dialog').addEventListener('cancel',event=>{if(licenseRequiredAtStart)event.preventDefault();});
+  $('license-copy').onclick=()=>copyMachineCode().catch(()=>{$('license-status').textContent='请手动复制机器码';});
+  $('license-import').onclick=()=>$('license-file').click();
+  $('license-file').onchange=async event=>{
+    const file=event.target.files?.[0];event.target.value='';if(!file)return;
+    const button=$('license-import');button.disabled=true;
+    try{
+      if(file.size>16384)throw new Error('许可证文件过大，请选择正确的 .lic 文件');
+      const result=await post('/license/import',{license:await file.text()});
+      if(!result.valid)throw new Error(result.message||'许可证无效');
+      licenseState=result;const initial=licenseRequiredAtStart;await refreshBootstrap();
+      if(licenseState?.required&&!licenseState.valid)throw new Error(licenseState.message||'许可证无效');
+      licenseRequiredAtStart=false;$('license-dialog').close();
+      if(initial&&!state.project)await showProjects();
+      else toast('授权已更新');
+    }catch(error){$('license-status').textContent=error.message;}
+    finally{button.disabled=false;}
+  };
+}
+
 function showProviderHint(id){
   const provider=state.providers.find(item=>item.id===id);
   $('provider-model-hint').textContent=provider?.model_hint||'';
@@ -959,10 +1012,10 @@ function bind() {
   window.addEventListener('beforeunload',event=>{if(state.dirty){event.preventDefault();event.returnValue='';}});
 }
 async function start() {
-  bind();renderTree();updateButtons();
-  try{const boot=await request('/bootstrap');$('version').textContent=`v${String(boot.version||'0.2').replace(/^v/i,'')}`;state.provider=boot.provider||null;state.catalog=boot.capabilities?.operations||{};attachmentLimits=boot.attachment_limits||attachmentLimits;
-    populateProviders(boot.providers,state.provider);
-    await showProjects();
+  bind();bindLicense();renderTree();updateButtons();
+  try{const boot=await refreshBootstrap();
+    if(boot.license?.required&&!boot.license.valid)showLicense(true);
+    else await showProjects();
   }catch(error){status('服务不可用','请确认本地服务已启动',true);toast(error.message);return;}
   if(initializationErrors.length){status('部分功能不可用',initializationErrors.join('；'),true);toast(initializationErrors.join('；'));}
 }
