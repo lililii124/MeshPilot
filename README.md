@@ -1,5 +1,3 @@
-[下载 Windows 安装包](https://github.com/lililii124/MeshPilot/releases/download/v1.1/MeshPilot-v1.1-Setup-x64.exe)
-
 首次使用需导入许可证。[申请授权](mailto:yuzheng@mail.ustc.edu.cn)
 
 **连接 DeepSeek**
