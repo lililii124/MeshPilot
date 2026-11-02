@@ -184,3 +184,5 @@ footer { height: 36px; color: #60777c; font-size: 12px; }
 
 #manual-dialog,#named-set-dialog,#workflow-dialog{max-height:90vh;overflow:auto}
 @media(max-width:1250px){header{height:auto;min-height:64px;flex-wrap:wrap;padding:10px 14px;gap:8px 14px}.brand{width:auto;min-width:140px}.project-heading{flex:1}.header-actions{width:100%;flex-wrap:wrap}}
+
+.brand .mark{display:block;width:36px;height:36px;background:transparent;border-radius:0;object-fit:contain;flex:none}
