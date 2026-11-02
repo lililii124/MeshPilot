@@ -1,5 +1,3 @@
-[下载 Windows 安装包](https://github.com/lililii124/MeshPilot/releases/download/v1.1/MeshPilot-v1.1-Setup-x64.exe)
-
 **连接 DeepSeek**
 
 1. 在 [DeepSeek 开放平台](https://platform.deepseek.com/)注册并登录，确认账户有可用余额，按需充值。
