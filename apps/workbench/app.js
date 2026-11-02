@@ -726,7 +726,7 @@ function renderManualFields() {
   }
   if(op==='plane_surface'||op==='split_surface')renderProfileCanvas(op,args);
   if(op==='profile_surface')renderCurveEditor(args);
-  $('manual-help').textContent=op==='split_solid'?'选择实体；输入平面上一点及法向，得到平面两侧的两个部件。':op==='profile_surface'?'每个闭合轮廓由顺序相连的 line 或 arc 构成；第一组为外轮廓，后续组为孔。圆弧使用圆心和端点，单段小于 180°。':op==='split_surface'?'选择直接创建的 XY 多边形面；输入两点定义贯穿整个面的直线。分割后得到两个部件。':op==='extrude_polygon'?'按轮廓顺序输入世界坐标点数组，如 [[0,0,0],[10,0,0],[10,10,0],[0,10,0]]；沿位移向量直线拉伸。':(spec.inputs?'变换或布尔运算作用于所选部件。向量使用 [x,y,z]。':'向量使用 [x,y,z]；坐标按项目原始单位解释。');
+  $('manual-help').textContent=op==='split_solid'?'选择实体；输入平面上一点及法向，得到平面两侧的两个部件。':op==='profile_surface'?'每个闭合轮廓由顺序相连的 line 或 arc 构成；第一组为外轮廓，后续组为孔。圆弧使用圆心和端点，单段小于 180°。':op==='split_surface'?'选择 XY 平面区域；输入两点定义贯穿整个面的直线，可切分圆弧和孔洞。分割后得到两个部件。':op==='extrude_polygon'?'按轮廓顺序输入世界坐标点数组，如 [[0,0,0],[10,0,0],[10,10,0],[0,10,0]]；沿位移向量直线拉伸。':(spec.inputs?'变换或布尔运算作用于所选部件。向量使用 [x,y,z]。':'向量使用 [x,y,z]；坐标按项目原始单位解释。');
 }
 
 function renderProfileCanvas(op,container){
@@ -787,7 +787,7 @@ function showWorkflow(workflow){
 }
 function bind() {
   const setForm=$('named-set-form'),setKind=setForm.elements.kind;
-  function setHelp(){const face=setKind.value==='face';setForm.elements.block_id.disabled=setKind.value==='node';setForm.elements.members.placeholder=face?'例如 1, 2, 1; 4, 3, -1':'例如 1, 2, 3';$('named-set-help').textContent=face?'单元面按“单元序号, 局部面序号, 方向”输入，多组用分号分隔；序号从 1 开始，方向为 1 或 -1。':'输入逗号或空格分隔的成员序号，序号从 1 开始。这些是当前网格的内部顺序，不是求解器编号。';}
+  function setHelp(){const face=setKind.value==='face';setForm.elements.block_id.disabled=setKind.value==='node';setForm.elements.members.placeholder=face?'例如 1, 2, 1; 4, 3, -1':'例如 1, 2, 3';$('named-set-help').textContent=face?(state.config?.mesh?.dimension===2?'壳面按“单元序号, 局部面序号, 方向”输入，方向为 1 或 -1；序号从 1 开始，多组用分号分隔。':'实体面按“单元序号, 局部面序号, 方向”输入，序号从 1 开始；实体导出仅支持朝外方向 1，多组用分号分隔。'):'输入逗号或空格分隔的成员序号，序号从 1 开始。这些是当前网格的内部顺序，不是求解器编号。';}
   $('named-set').onclick=()=>{setHelp();$('named-set-dialog').showModal();};setKind.onchange=setHelp;$('named-set-close').onclick=()=>{if(!state.transaction)$('named-set-dialog').close();};
   setForm.onsubmit=async event=>{event.preventDefault();if(!state.project||!state.artifact||!beginEditTransaction())return;try{const kind=setKind.value,text=setForm.elements.members.value.trim(),positive=value=>{if(!/^\d+$/.test(value)||Number(value)<1||!Number.isSafeInteger(Number(value)))throw new Error('成员序号必须是从 1 开始的整数');return Number(value)-1;};let members;if(kind==='face'){members=text.split(';').map(group=>{const parts=group.trim().split(/[\s,]+/);if(parts.length!==3||!['1','-1'].includes(parts[2]))throw new Error('每个面需要单元序号、局部面序号及方向');return [positive(parts[0]),positive(parts[1]),Number(parts[2])];});}else members=text.split(/[\s,]+/).map(positive);const id=state.project.id,revision=state.project.revision_id,artifact_id=state.artifact.id;const payload={base_revision:revision,idempotency_key:crypto.randomUUID(),artifact_id,name:setForm.elements.name.value,kind,members};if(kind!=='node'&&setForm.elements.block_id.value.trim())payload.block_id=setForm.elements.block_id.value.trim();const project=await post(`/projects/${encodeURIComponent(id)}/named-set`,payload);if(state.project?.id===id&&state.project.revision_id===revision){state.redoStack=[];setProject(project);$('named-set-dialog').close();status('集合已创建','生成网格后可显示和导出');}}catch(error){fail(error);}finally{endEditTransaction();}};
 

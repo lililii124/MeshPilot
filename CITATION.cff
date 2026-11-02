@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "使用 MeshPilot 完成研究时，请引用此软件。"
+type: software
+title: "MeshPilot: Text2Mesh"
+authors:
+  - name: Zheng Yu
+version: "1.1"
+date-released: 2026-11-02
+url: "https://github.com/lililii124/MeshPilot"
+repository-code: "https://github.com/lililii124/MeshPilot"
